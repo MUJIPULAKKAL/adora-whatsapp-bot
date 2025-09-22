@@ -1,13 +1,13 @@
 from flask import Flask, request, jsonify
 from app.utils.whatsapp_utils import send_message
 from app.services.business_service import calculate_invoice, calculate_multi_invoice
+import os
 
 app = Flask(__name__)
 
 @app.route("/webhook", methods=["GET"])
 def verify():
-    import os
-verify_token = os.getenv("VERIFY_TOKEN", "ADORABLINDSTOKEN")
+    verify_token = os.getenv("VERIFY_TOKEN", "ADORABLINDSTOKEN")
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
@@ -15,6 +15,7 @@ verify_token = os.getenv("VERIFY_TOKEN", "ADORABLINDSTOKEN")
     if mode == "subscribe" and token == verify_token:
         return challenge, 200
     return "Forbidden", 403
+
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -45,8 +46,7 @@ def webhook():
 
     return jsonify({"status": "success"}), 200
 
+
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
-
