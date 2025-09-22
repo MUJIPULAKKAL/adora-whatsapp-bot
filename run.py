@@ -6,28 +6,53 @@ import os
 
 app = Flask(__name__)
 
-# Load environment variables
+# Environment variables
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "ADORABLINDSTOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 
 # Initialize OpenAI client
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-def ask_openai(message_text):
-    """Send customer message to OpenAI Assistant and return reply."""
-    response = openai_client.chat.completions.create(
-        model="gpt-4o-mini",   # cost-effective fast model
-        messages=[
-            {"role": "system", "content": "You are Adora Blinds Assistant AI. You help customers with blinds, curtains, wallpapers, roller blinds pricing, and home decor."},
-            {"role": "user", "content": message_text}
-        ]
+# Each customer gets their own thread for memory
+user_threads = {}
+
+def ask_assistant(user_id, message_text):
+    """Send a message to OpenAI Assistant with memory per user"""
+    # Create a thread if not exists
+    if user_id not in user_threads:
+        thread = openai_client.beta.threads.create()
+        user_threads[user_id] = thread.id
+
+    # Add user message
+    openai_client.beta.threads.messages.create(
+        thread_id=user_threads[user_id],
+        role="user",
+        content=message_text
     )
-    return response.choices[0].message.content
+
+    # Run the assistant
+    run = openai_client.beta.threads.runs.create(
+        thread_id=user_threads[user_id],
+        assistant_id=ASSISTANT_ID
+    )
+
+    # Poll until run completes
+    while True:
+        run_status = openai_client.beta.threads.runs.retrieve(
+            thread_id=user_threads[user_id],
+            run_id=run.id
+        )
+        if run_status.status == "completed":
+            break
+
+    # Get the assistant's reply
+    messages = openai_client.beta.threads.messages.list(thread_id=user_threads[user_id])
+    return messages.data[0].content[0].text.value
 
 
 @app.route("/webhook", methods=["GET"])
 def verify():
-    """Webhook verification with Meta (for initial setup)."""
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
@@ -39,7 +64,6 @@ def verify():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """Main webhook to handle incoming WhatsApp messages."""
     data = request.get_json()
     try:
         message = data["entry"][0]["changes"][0]["value"]["messages"][0]
@@ -49,7 +73,7 @@ def webhook():
         reply = ""
 
         if text.lower().startswith("order"):
-            # Process order requests
+            # Existing invoice logic
             order_text = text.replace("order", "").strip()
             if "," in order_text:
                 reply = calculate_multi_invoice(order_text)
@@ -59,10 +83,10 @@ def webhook():
                     width, height, pcs = float(parts[0]), float(parts[1]), int(parts[2])
                     reply = calculate_invoice(width, height, pcs)
                 else:
-                    reply = "❌ Invalid format. Use: order 2.5x3.5x1 OR multiple: order 2.5x3.5x1,1.5x1.0x2"
+                    reply = "❌ Invalid format. Use: order 2.5x3.5x1 OR multiple orders."
         else:
-            # Forward all other messages to OpenAI
-            reply = ask_openai(text)
+            # Use Assistants API for everything else
+            reply = ask_assistant(from_number, text)
 
         send_message(from_number, reply)
 
